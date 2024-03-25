@@ -18,6 +18,9 @@ defimpl Scrivener.Paginater, for: Ecto.Query do
         total_entries(query, repo, caller, options)
       end)
 
+    entries = entries(query, repo, page_number, page_size, caller, options)
+    total_entries = Task.await(total_entries)
+
     total_pages = total_pages(total_entries, page_size)
     allow_overflow_page_number = Keyword.get(options, :allow_overflow_page_number, false)
 
@@ -27,15 +30,13 @@ defimpl Scrivener.Paginater, for: Ecto.Query do
     %Page{
       page_size: page_size,
       page_number: page_number,
-      entries: entries(query, repo, page_number, total_pages, page_size, caller, options),
+      entries: entries,
       total_entries: total_entries,
       total_pages: total_pages
     }
   end
 
-  defp entries(_, _, page_number, total_pages, _, _, _) when page_number > total_pages, do: []
-
-  defp entries(query, repo, page_number, _, page_size, caller, options) do
+  defp entries(query, repo, page_number, page_size, caller, options) do
     offset = Keyword.get_lazy(options, :offset, fn -> page_size * (page_number - 1) end)
     prefix = options[:prefix]
 
@@ -48,14 +49,16 @@ defimpl Scrivener.Paginater, for: Ecto.Query do
   defp total_entries(query, repo, caller, options) do
     prefix = options[:prefix]
 
-    total_entries =
-      query
-      |> exclude(:preload)
-      |> exclude(:order_by)
-      |> aggregate()
-      |> one(repo, caller, prefix)
+    Task.async(fn ->
+      total_entries =
+        query
+        |> exclude(:preload)
+        |> exclude(:order_by)
+        |> aggregate()
+        |> one(repo, caller, prefix)
 
-    total_entries || 0
+      total_entries || 0
+    end)
   end
 
   defp aggregate(%{distinct: %{expr: expr}} = query) when expr == true or is_list(expr) do
