@@ -4,6 +4,8 @@ defimpl Scrivener.Paginater, for: Ecto.Query do
   alias Scrivener.{Config, Page}
 
   @moduledoc false
+  @default_timeout 15_000
+  @repo_opts [:timeout, :prefix]
 
   @spec paginate(Ecto.Query.t(), Scrivener.Config.t()) :: Scrivener.Page.t()
   def paginate(query, %Config{
@@ -19,7 +21,7 @@ defimpl Scrivener.Paginater, for: Ecto.Query do
       end)
 
     entries = entries(query, repo, page_number, page_size, caller, options)
-    total_entries = Task.await(total_entries)
+    total_entries = Task.await(total_entries, options[:timeout] || @default_timeout)
 
     total_pages = total_pages(total_entries, page_size)
     allow_overflow_page_number = Keyword.get(options, :allow_overflow_page_number, false)
@@ -38,24 +40,21 @@ defimpl Scrivener.Paginater, for: Ecto.Query do
 
   defp entries(query, repo, page_number, page_size, caller, options) do
     offset = Keyword.get_lazy(options, :offset, fn -> page_size * (page_number - 1) end)
-    prefix = options[:prefix]
 
     query
     |> offset(^offset)
     |> limit(^page_size)
-    |> all(repo, caller, prefix)
+    |> all(repo, caller, options)
   end
 
   defp total_entries(query, repo, caller, options) do
-    prefix = options[:prefix]
-
     Task.async(fn ->
       total_entries =
         query
         |> exclude(:preload)
         |> exclude(:order_by)
         |> aggregate()
-        |> one(repo, caller, prefix)
+        |> one(repo, caller, options)
 
       total_entries || 0
     end)
@@ -103,19 +102,19 @@ defimpl Scrivener.Paginater, for: Ecto.Query do
     (total_entries / page_size) |> Float.ceil() |> round
   end
 
-  defp all(query, repo, caller, nil) do
-    repo.all(query, caller: caller)
+  defp all(query, repo, caller, opts) do
+    opts =
+      Keyword.take(opts, @repo_opts)
+      |> Keyword.put(:caller, caller)
+
+    repo.all(query, opts)
   end
 
-  defp all(query, repo, caller, prefix) do
-    repo.all(query, caller: caller, prefix: prefix)
-  end
+  defp one(query, repo, caller, opts) do
+    opts =
+      Keyword.take(opts, @repo_opts)
+      |> Keyword.put(:caller, caller)
 
-  defp one(query, repo, caller, nil) do
-    repo.one(query, caller: caller)
-  end
-
-  defp one(query, repo, caller, prefix) do
-    repo.one(query, caller: caller, prefix: prefix)
+    repo.one(query, opts)
   end
 end
